@@ -115,3 +115,47 @@ if __name__ == "__main__":
     jid = create_job(demo_urls)
     process_job(jid)
     print(get_job_summary(jid))
+
+
+# ---- C2S3 placeholder API (CLI wiring only) ----
+
+def get_job_status(job_id: str) -> dict:
+    return {"ok": True, "message": "not implemented", "job_id": job_id}
+
+
+def list_tracks(limit: int = 25) -> dict:
+    return {"ok": True, "message": "not implemented", "limit": limit}
+
+
+def search_tracks(query: str) -> dict:
+    return {"ok": True, "message": "not implemented", "query": query}
+
+
+def update_track(track_id: str, fields: dict) -> dict:
+    return {
+        "ok": True,
+        "message": "not implemented",
+        "track_id": track_id,
+        "fields": fields,
+    }
+
+
+def delete_track(track_id: str, soft: bool = True) -> dict:
+    return {"ok": True, "message": "not implemented", "track_id": track_id, "soft": soft}
+
+
+def purge_tracks(older_than_days: int | None = None, confirm: bool = False) -> dict:
+    return {
+        "ok": True,
+        "message": "not implemented",
+        "older_than_days": older_than_days,
+        "confirm": confirm,
+    }
+
+
+def upload_track(track_id: str) -> dict:
+    return {"ok": True, "message": "not implemented", "track_id": track_id}
+
+
+def upload_job(job_id: str) -> dict:
+    return {"ok": True, "message": "not implemented", "job_id": job_id}
