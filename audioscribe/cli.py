@@ -12,6 +12,7 @@ from audioscribe_core_fake import (
     update_track,
     upload_job,
     upload_track,
+    process_job,
 )
 
 app = typer.Typer()
@@ -28,6 +29,7 @@ def version_cmd():
 def ingest_cmd(urls: list[str]):
     """Ingest URLs (placeholder)."""
     job_id = create_job(urls)
+    process_job(job_id, step_delay_seconds=0) #still fake for now, but proves wiring
     print(f"job_id={job_id}")
 
 
