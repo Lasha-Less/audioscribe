@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import typer
 
+import json
+
+from audioscribe.core import create_job as core_create_job, process_job as core_process_job
+
 from audioscribe_core_fake import (
     create_job,
     delete_track,
@@ -28,9 +32,13 @@ def version_cmd():
 @app.command("ingest")
 def ingest_cmd(urls: list[str]):
     """Ingest URLs (placeholder)."""
-    job_id = create_job(urls)
-    process_job(job_id, step_delay_seconds=0) #still fake for now, but proves wiring
-    print(f"job_id={job_id}")
+    result = core_create_job(urls)
+    print(json.dumps(result, indent=2))
+
+    if result.get("ok"):
+        job_id = result["job_id"]
+        print(json.dumps(core_process_job(job_id), indent=2))
+        print(f"job_id={job_id}")
 
 
 @app.command("status")
