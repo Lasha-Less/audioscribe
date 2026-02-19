@@ -1,10 +1,12 @@
 from __future__ import annotations
-
+from pathlib import Path
 import typer
-
 import json
 
 from audioscribe.core import create_job as core_create_job, process_job as core_process_job
+from audioscribe.core.verify_audio import verify_audio
+from dataclasses import asdict, is_dataclass
+from enum import Enum
 
 from audioscribe_core_fake import (
     create_job,
@@ -21,6 +23,18 @@ from audioscribe_core_fake import (
 
 app = typer.Typer()
 app.info.help = "AudioScribe CLI (skeleton)."
+
+
+def _to_jsonable(obj):
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, Enum):
+        return obj.value
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    return obj
 
 
 @app.command("version")
@@ -121,3 +135,75 @@ def upload_cmd(
 
 def run():
     app()
+
+
+@app.command()
+def verify(path: str, strict: bool = False):
+    """
+    Verify an audio file.
+    Steps 2–4: path validation + call core + JSON mapping.
+    """
+    file_path = Path(path)
+
+    # 1️⃣ Exists check
+    if not file_path.exists():
+        result = {
+            "ok": False,
+            "message": "file does not exist",
+            "path": path
+        }
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(code=1)
+
+    # 2️⃣ Is file check
+    if not file_path.is_file():
+        result = {
+            "ok": False,
+            "message": "path is not a file",
+            "path": path
+        }
+        typer.echo(json.dumps(result, indent=2))
+        raise typer.Exit(code=1)
+
+    verifier_result = verify_audio(str(file_path))
+    data = _to_jsonable(verifier_result)
+
+    status = data.get("status") or "failed"
+    warnings = data.get("warnings", [])
+    errors = data.get("errors", [])
+    metrics = data.get("metrics")
+
+    ok = (status == "ok") or (status == "warning" and not strict)
+
+    if status == "ok":
+        message = "verification ok"
+    elif status == "warning":
+        message = f"verification warnings: {len(warnings)}"
+    else:
+        message = f"verification failed: {len(errors)}"
+
+    result = {
+        "ok": ok,
+        "status": status,
+        "path": path,
+        "metrics": metrics,
+        "warnings": warnings,
+        "errors": errors,
+        "message": message,
+    }
+
+    typer.echo(json.dumps(result, indent=2))
+
+    if status == "ok":
+        raise typer.Exit(code=0)
+
+    if status == "warning":
+        # strict mode treats warnings as failures
+        raise typer.Exit(code=1 if strict else 2)
+
+    # failed or unknown
+    raise typer.Exit(code=1)
+
+
+
+
