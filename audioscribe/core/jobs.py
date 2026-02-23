@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
 from urllib.parse import urlparse, parse_qs
+from audioscribe.core.verification_schema import normalize_verification
 
 
 @dataclass(frozen=True)
@@ -146,26 +147,43 @@ def process_job(job_id: str) -> dict:
             "stderr_tail": (completed.stderr or "")[-400:],
         }
 
-    verification_payload = None
+    # Canonical verification object (same keys everywhere)
+    verification_payload = normalize_verification(
+        status="failed",
+        path=mp3_path if mp3_path else None,
+        metrics=None,
+        warnings=[],
+        errors=[] if mp3_exists else ["mp3 not found after download"],
+    )
+
     if mp3_exists:
         from audioscribe.core.verify_audio import verify_audio  # local import keeps startup simple
         verification = verify_audio(mp3_path)
 
-        # JSON-serializable structure
-        verification_payload = {
-            "status": verification.status.value,
-            "ok": verification.ok,
-            "metrics": {
-                "duration_s": verification.metrics.duration_s,
-                "file_size_bytes": verification.metrics.file_size_bytes,
-                "bitrate_kbps": verification.metrics.bitrate_kbps,
-                "sample_rate_hz": verification.metrics.sample_rate_hz,
-                "channels": verification.metrics.channels,
-                "codec": verification.metrics.codec,
-            },
-            "warnings": verification.warnings,
-            "errors": verification.errors,
-        }
+        # verify_audio() may return dict-ish or an object; we normalize either way
+        if isinstance(verification, dict):
+            verification_payload = normalize_verification(
+                status=verification.get("status"),
+                path=verification.get("path") or mp3_path,
+                metrics=verification.get("metrics"),
+                warnings=verification.get("warnings"),
+                errors=verification.get("errors"),
+            )
+        else:
+            metrics = getattr(verification, "metrics", None)
+            verification_payload = normalize_verification(
+                status=getattr(getattr(verification, "status", None), "value", None),
+                path=mp3_path,
+                metrics={
+                    "duration_s": getattr(metrics, "duration_s", None) if metrics else None,
+                    "sample_rate_hz": getattr(metrics, "sample_rate_hz", None) if metrics else None,
+                    "bitrate_kbps": getattr(metrics, "bitrate_kbps", None) if metrics else None,
+                    "channels": getattr(metrics, "channels", None) if metrics else None,
+                    "file_size_bytes": getattr(metrics, "file_size_bytes", None) if metrics else None,
+                },
+                warnings=getattr(verification, "warnings", None),
+                errors=getattr(verification, "errors", None),
+            )
 
     return {
         "ok": True,

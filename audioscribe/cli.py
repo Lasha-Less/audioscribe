@@ -4,6 +4,7 @@ import typer
 import json
 
 from audioscribe.core import create_job as core_create_job, process_job as core_process_job
+from audioscribe.core.verification_schema import normalize_verification
 from audioscribe.core.verify_audio import verify_audio
 from dataclasses import asdict, is_dataclass
 from enum import Enum
@@ -141,69 +142,77 @@ def run():
 def verify(path: str, strict: bool = False):
     """
     Verify an audio file.
-    Steps 2–4: path validation + call core + JSON mapping.
+    Prints canonical verification JSON (same keys always).
+    Exit code:
+      0 = ok
+      2 = warning (non-strict)
+      1 = failed (or warning in strict)
     """
     file_path = Path(path)
 
-    # 1️⃣ Exists check
+    def _blank_result(p: str, status: str, errors=None, warnings=None):
+        return {
+            "ok": (status != "failed"),
+            "status": status,
+            "path": p,
+            "metrics": {
+                "duration_s": None,
+                "sample_rate_hz": None,
+                "bitrate_kbps": None,
+                "channels": None,
+                "file_size_bytes": None,
+            },
+            "warnings": warnings or [],
+            "errors": errors or [],
+        }
+
+    # 1️⃣ Exists check (canonical output)
     if not file_path.exists():
-        result = {
-            "ok": False,
-            "message": "file does not exist",
-            "path": path
-        }
+        result = _blank_result(
+            p=str(file_path),
+            status="failed",
+            errors=["file does not exist"],
+        )
         typer.echo(json.dumps(result, indent=2))
         raise typer.Exit(code=1)
 
-    # 2️⃣ Is file check
+    # 2️⃣ Is file check (canonical output)
     if not file_path.is_file():
-        result = {
-            "ok": False,
-            "message": "path is not a file",
-            "path": path
-        }
+        result = _blank_result(
+            p=str(file_path),
+            status="failed",
+            errors=["path is not a file"],
+        )
         typer.echo(json.dumps(result, indent=2))
         raise typer.Exit(code=1)
 
+    # 3️⃣ Core verification (assumed to return dict-ish)
     verifier_result = verify_audio(str(file_path))
-    data = _to_jsonable(verifier_result)
+    data = _to_jsonable(verifier_result) or {}
 
-    status = data.get("status") or "failed"
-    warnings = data.get("warnings", [])
-    errors = data.get("errors", [])
-    metrics = data.get("metrics")
+    result = normalize_verification(
+        status=data.get("status"),
+        path=str(file_path),
+        metrics=data.get("metrics"),
+        warnings=data.get("warnings"),
+        errors=data.get("errors"),
+    )
 
-    ok = (status == "ok") or (status == "warning" and not strict)
-
-    if status == "ok":
-        message = "verification ok"
-    elif status == "warning":
-        message = f"verification warnings: {len(warnings)}"
-    else:
-        message = f"verification failed: {len(errors)}"
-
-    result = {
-        "ok": ok,
-        "status": status,
-        "path": path,
-        "metrics": metrics,
-        "warnings": warnings,
-        "errors": errors,
-        "message": message,
-    }
+    # strict mode treats warnings as failures for human-visible JSON
+    if strict and result["status"] == "warning":
+        result["ok"] = False
 
     typer.echo(json.dumps(result, indent=2))
+
+    status = result["status"]
 
     if status == "ok":
         raise typer.Exit(code=0)
 
     if status == "warning":
-        # strict mode treats warnings as failures
         raise typer.Exit(code=1 if strict else 2)
 
-    # failed or unknown
     raise typer.Exit(code=1)
-
 
 
 
