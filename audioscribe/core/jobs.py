@@ -7,6 +7,7 @@ from typing import Iterable
 from uuid import uuid4
 from urllib.parse import urlparse, parse_qs
 from audioscribe.core.verification_schema import normalize_verification
+from audioscribe.core.config import get_settings
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ def process_job(job_id: str) -> dict:
         return {"ok": False, "message": "no urls in job", "job_id": job_id}
 
     url = job.urls[0]
+    settings = get_settings()
 
     # Save to repo-root /outputs (same idea you already used)
     out_dir = Path("outputs")
@@ -80,11 +82,12 @@ def process_job(job_id: str) -> dict:
     cmd = [
         "yt-dlp",
         "--windows-filenames",
-        "--extractor-args", "youtube:player_client=android",
+        *(["--extractor-args", "youtube:player_client=android"] if not settings.cookies_from_browser else []),
         "-x",
         "--audio-format", "mp3",
         "--print", "after_move:filepath",
         "-o", out_template,
+        *(["--cookies-from-browser", settings.cookies_from_browser] if settings.cookies_from_browser else []),
         url,
     ]
 
