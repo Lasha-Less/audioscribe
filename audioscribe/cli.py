@@ -45,14 +45,21 @@ def version_cmd():
 
 
 @app.command("ingest")
-def ingest_cmd(urls: list[str]):
+def ingest_cmd(
+    urls: list[str],
+    allow_playlist: bool = typer.Option(
+        False,
+        "--allow-playlist",
+        help="Allow downloading multiple items when a playlist is detected/expanded.",
+    ),
+):
     """Ingest URLs (placeholder)."""
     result = core_create_job(urls)
     print(json.dumps(result, indent=2))
 
     if result.get("ok"):
         job_id = result["job_id"]
-        print(json.dumps(core_process_job(job_id), indent=2))
+        print(json.dumps(core_process_job(job_id, allow_playlist=allow_playlist), indent=2))
         print(f"job_id={job_id}")
 
 

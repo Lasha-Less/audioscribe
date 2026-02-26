@@ -56,7 +56,48 @@ def _extract_youtube_id(url: str) -> str | None:
     return None
 
 
-def process_job(job_id: str) -> dict:
+def _is_playlist_url(url: str) -> bool:
+    # Minimal heuristic: playlist context in query params
+    return "list=" in (url or "")
+
+
+def _expand_playlist_to_video_urls(url: str, settings) -> tuple[list[str], dict | None]:
+    """
+    Returns (video_urls, debug)
+    - video_urls: list of canonical watch URLs
+    - debug: optional debug info if expansion fails
+    """
+    cmd = [
+        "yt-dlp",
+        "--flat-playlist",
+        "--print", "id",
+        *(["--cookies-from-browser", settings.cookies_from_browser] if settings.cookies_from_browser else []),
+        url,
+    ]
+
+    try:
+        completed = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as e:
+        debug = {
+            "message": "playlist expansion failed",
+            "stdout_tail": (e.stdout or "")[-400:],
+            "stderr_tail": (e.stderr or "")[-400:],
+        }
+        return [], debug
+    except FileNotFoundError:
+        debug = {"message": "yt-dlp not found during playlist expansion"}
+        return [], debug
+    except Exception as e:
+        debug = {"message": "playlist expansion error", "error": str(e)}
+        return [], debug
+
+    ids = [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+    # Convert to canonical watch URLs
+    video_urls = [f"https://www.youtube.com/watch?v={vid}" for vid in ids]
+    return video_urls, None
+
+
+def process_job(job_id: str, allow_playlist: bool = False) -> dict:
     """
     Process a job end-to-end.
     Downloads MP3s for all URLs sequentially via yt-dlp,
@@ -71,6 +112,11 @@ def process_job(job_id: str) -> dict:
             "ok": False,
             "message": "job not found",
             "job_id": job_id,
+            "input_urls_count": 0,
+            "expanded_urls_count": 0,
+            "requires_confirmation": False,
+            "next_command": None,
+            "errors": ["job not found"],
             "total": 0,
             "succeeded": 0,
             "failed": 0,
@@ -82,6 +128,11 @@ def process_job(job_id: str) -> dict:
             "ok": False,
             "message": "no urls in job",
             "job_id": job_id,
+            "input_urls_count": 0,
+            "expanded_urls_count": 0,
+            "requires_confirmation": False,
+            "next_command": None,
+            "errors": ["no urls in job"],
             "total": 0,
             "succeeded": 0,
             "failed": 0,
@@ -89,6 +140,43 @@ def process_job(job_id: str) -> dict:
         }
 
     settings = get_settings()
+
+    input_urls_count = len(job.urls)
+
+    work_urls: list[str] = []
+    expanded_urls_count = 0
+
+    for u in job.urls:
+        if _is_playlist_url(u):
+            expanded, debug = _expand_playlist_to_video_urls(u, settings)
+
+            # If expansion fails or yields nothing, just treat as single URL (yt-dlp will decide)
+            if not expanded:
+                work_urls.append(u)
+                continue
+
+            # If it expands to multiple items, enforce guard
+            if len(expanded) > 1 and not allow_playlist:
+                return {
+                    "ok": False,
+                    "message": "playlist detected; confirmation required",
+                    "job_id": job_id,
+                    "input_urls_count": input_urls_count,
+                    "expanded_urls_count": len(expanded),
+                    "requires_confirmation": True,
+                    "next_command": f'audioscribe ingest "{u}" --allow-playlist',
+                    "errors": [],
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "items": [],
+                }
+
+            work_urls.extend(expanded)
+        else:
+            work_urls.append(u)
+
+    expanded_urls_count = len(work_urls)
 
     out_dir = Path("outputs")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -260,7 +348,7 @@ def process_job(job_id: str) -> dict:
 
         return item
 
-    items = [_process_one(url, index) for index, url in enumerate(job.urls)]
+    items = [_process_one(url, index) for index, url in enumerate(work_urls)]
 
     total = len(items)
     succeeded = sum(1 for it in items if it["ok"])
@@ -270,6 +358,11 @@ def process_job(job_id: str) -> dict:
         "ok": True,
         "message": "job processed",
         "job_id": job_id,
+        "input_urls_count": input_urls_count,
+        "expanded_urls_count": expanded_urls_count,
+        "requires_confirmation": False,
+        "next_command": None,
+        "errors": [],
         "total": total,
         "succeeded": succeeded,
         "failed": failed,
