@@ -1,5 +1,18 @@
-from __future__ import annotations
+"""
+jobs.py — job lifecycle + end-to-end processing (current single-module implementation).
 
+Owns:
+- in-memory job store (temporary)
+- create_job/process_job/get_job_status
+- sequential download + verification pipeline
+
+Non-goals:
+- CLI parsing (belongs in cli.py)
+- persistence (will move to storage layer later)
+"""
+
+
+from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,6 +154,9 @@ def process_job(job_id: str, allow_playlist: bool = False) -> dict:
 
     settings = get_settings()
 
+    # Non-fatal diagnostics captured during processing (predictable failure info)
+    errors: list[str] = []
+
     input_urls_count = len(job.urls)
 
     work_urls: list[str] = []
@@ -150,8 +166,11 @@ def process_job(job_id: str, allow_playlist: bool = False) -> dict:
         if _is_playlist_url(u):
             expanded, debug = _expand_playlist_to_video_urls(u, settings)
 
-            # If expansion fails or yields nothing, just treat as single URL (yt-dlp will decide)
+            # If expansion fails or yields nothing, fall back to treating the URL as a single item.
+            # We still record a diagnostic note so future debugging is possible.
             if not expanded:
+                if debug:
+                    errors.append(f"playlist expansion failed; falling back to single URL: {debug.get('message')}")
                 work_urls.append(u)
                 continue
 
@@ -165,7 +184,7 @@ def process_job(job_id: str, allow_playlist: bool = False) -> dict:
                     "expanded_urls_count": len(expanded),
                     "requires_confirmation": True,
                     "next_command": f'audioscribe ingest "{u}" --allow-playlist',
-                    "errors": [],
+                    "errors": errors,
                     "total": 0,
                     "succeeded": 0,
                     "failed": 0,
@@ -362,7 +381,7 @@ def process_job(job_id: str, allow_playlist: bool = False) -> dict:
         "expanded_urls_count": expanded_urls_count,
         "requires_confirmation": False,
         "next_command": None,
-        "errors": [],
+        "errors": errors,
         "total": total,
         "succeeded": succeeded,
         "failed": failed,
