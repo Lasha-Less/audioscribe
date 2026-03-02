@@ -9,21 +9,10 @@ from audioscribe.core.verify_audio import verify_audio
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 
-from audioscribe_core_fake import (
-    create_job,
-    delete_track,
-    get_job_status,
-    list_tracks,
-    purge_tracks,
-    search_tracks,
-    update_track,
-    upload_job,
-    upload_track,
-    process_job,
-)
+import audioscribe_core_fake as fake
 
 app = typer.Typer()
-app.info.help = "AudioScribe CLI (skeleton)."
+app.info.help = "AudioScribe CLI."
 
 
 def _to_jsonable(obj):
@@ -53,7 +42,7 @@ def ingest_cmd(
         help="Allow downloading multiple items when a playlist is detected/expanded.",
     ),
 ):
-    """Ingest URLs (placeholder)."""
+    """Ingest URLs (create job + process)."""
     result = core_create_job(urls)
     print(json.dumps(result, indent=2))
 
@@ -66,21 +55,21 @@ def ingest_cmd(
 @app.command("status")
 def status_cmd(job_id: str):
     """Show status for a job (placeholder)"""
-    result = get_job_status(job_id)
+    result = fake.get_job_status(job_id)
     typer.echo(str(result))
 
 
 @app.command("list")
 def list_cmd(limit: int = typer.Option(25, "--limit", "-m")):
     """List tracks (placeholder)"""
-    result = list_tracks(limit)
+    result = fake.list_tracks(limit)
     typer.echo(str(result))
 
 
 @app.command("search")
 def search_cmd(query: str):
     """Search for tracks (placeholder)"""
-    result = search_tracks(query)
+    result = fake.search_tracks(query)
     typer.echo(str(result))
 
 
@@ -90,7 +79,7 @@ def delete_cmd(
     hard: bool = typer.Option(False, "--hard"),
 ):
     """Delete a track (placeholder)."""
-    result = delete_track(track_id, soft=not hard)
+    result = fake.delete_track(track_id, soft=not hard)
     typer.echo(str(result))
 
 
@@ -108,7 +97,7 @@ def edit_cmd(
     if artist is not None:
         fields["artist"] = artist
 
-    result = update_track(track_id, fields)
+    result = fake.update_track(track_id, fields)
     typer.echo(str(result))
 
 
@@ -118,7 +107,7 @@ def purge_cmd(
     confirm: bool = typer.Option(False, "--confirm"),
 ):
     """Purge tracks (placeholder)."""
-    result = purge_tracks(older_than_days=older_than_days, confirm=confirm)
+    result = fake.purge_tracks(older_than_days=older_than_days, confirm=confirm)
     typer.echo(str(result))
 
 
@@ -129,7 +118,7 @@ def upload_cmd(
 ):
     """Upload a track or a whole job (placeholder)."""
     if job_id is not None:
-        result = upload_job(job_id)
+        result = fake.upload_job(job_id)
         typer.echo(str(result))
         return
 
@@ -137,7 +126,7 @@ def upload_cmd(
         typer.echo("Provide TRACK_ID or use --job JOB_ID")
         raise typer.Exit(code=1)
 
-    result = upload_track(track_id)
+    result = fake.upload_track(track_id)
     typer.echo(str(result))
 
 
