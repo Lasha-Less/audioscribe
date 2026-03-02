@@ -11,9 +11,12 @@ Goal:
 from __future__ import annotations
 
 from pathlib import Path
-from yt_dlp import YoutubeDL
+#from yt_dlp import YoutubeDL
+# NOTE: keep this module safe to import even if yt_dlp isn't installed.
+# (Import yt_dlp only inside functions that actually need it.)
 
-from typing import Any, cast
+#from typing import Any, cast
+import subprocess
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -103,15 +106,21 @@ def process_job(job_id: str, *, step_delay_seconds: float = 0.3) -> None:
 
         try:
             # Ask yt-dlp for metadata first (no download yet) so we get video id
-            meta_opts: dict[str, Any] = {
-                "quiet": True,
-                "noprogress": True,
-                "remote_components": ["ejs:github"],
-            }
-
-            with YoutubeDL(cast(Any, meta_opts)) as ydl:
-                info = ydl.extract_info(url, download=False)
-                video_id = info.get("id") or "unknown"
+            # Ask yt-dlp for id (no download)
+            try:
+                meta_cmd = [
+                    "yt-dlp",
+                    "--flat-playlist",
+                    "--no-download",
+                    "--print",
+                    "id",
+                    url,
+                ]
+                meta_completed = subprocess.run(meta_cmd, capture_output=True, text=True, check=True)
+                video_id = (meta_completed.stdout or "").strip().splitlines()[-1] if (
+                            meta_completed.stdout or "").strip() else "unknown"
+            except Exception:
+                video_id = "unknown"
 
             target_path = _safe_target_path(output_dir, video_id)
             outtmpl_no_ext = str(target_path.with_suffix(""))  # yt-dlp adds .mp3 after postprocess
@@ -132,8 +141,22 @@ def process_job(job_id: str, *, step_delay_seconds: float = 0.3) -> None:
                 ],
             }
 
-            with YoutubeDL(ydl_opts) as ydl:
-                ydl.download([url])
+            try:
+                dl_cmd = [
+                    "yt-dlp",
+                    "--windows-filenames",
+                    "-x",
+                    "--audio-format",
+                    "mp3",
+                    "-o",
+                    outtmpl_no_ext + ".%(ext)s",
+                    url,
+                ]
+                subprocess.run(dl_cmd, capture_output=True, text=True, check=True)
+            except Exception as e:
+                job.progress[url] = "failed"
+                print(f"FAIL {url} -> {e}")
+                continue
 
             # After postprocessing, expected file is target_path
             if target_path.exists():

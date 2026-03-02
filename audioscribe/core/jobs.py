@@ -98,7 +98,7 @@ def _expand_playlist_to_video_urls(url: str, settings) -> tuple[list[str], dict 
         }
         return [], debug
     except FileNotFoundError:
-        debug = {"message": "yt-dlp not found during playlist expansion"}
+        debug = {"message": "yt-dlp not found. Is it installed in this venv?"}
         return [], debug
     except Exception as e:
         debug = {"message": "playlist expansion error", "error": str(e)}

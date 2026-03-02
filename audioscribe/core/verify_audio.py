@@ -37,6 +37,11 @@ def verify_audio(mp3_path: str | Path) -> VerificationResult:
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        return VerificationResult(
+            status=VerificationStatus.FAILED,
+            errors=["ffprobe not found. Is ffmpeg/ffprobe installed and on PATH?"],
+        )
     except Exception as e:
         return VerificationResult(
             status=VerificationStatus.FAILED,
