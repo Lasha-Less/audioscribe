@@ -44,11 +44,11 @@ def ingest_cmd(
 ):
     """Ingest URLs (create job + process)."""
     result = core_create_job(urls)
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
     if result.get("ok"):
         job_id = result["job_id"]
-        print(json.dumps(core_process_job(job_id, allow_playlist=allow_playlist), indent=2))
+        print(json.dumps(core_process_job(job_id, allow_playlist=allow_playlist), indent=2, ensure_ascii=False))
         print(f"job_id={job_id}")
 
 

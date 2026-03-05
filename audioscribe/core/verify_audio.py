@@ -36,7 +36,13 @@ def verify_audio(mp3_path: str | Path) -> VerificationResult:
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
     except FileNotFoundError:
         return VerificationResult(
             status=VerificationStatus.FAILED,
@@ -52,6 +58,12 @@ def verify_audio(mp3_path: str | Path) -> VerificationResult:
         return VerificationResult(
             status=VerificationStatus.FAILED,
             errors=[result.stderr.strip() or "ffprobe returned error"],
+        )
+
+    if not result.stdout:
+        return VerificationResult(
+            status=VerificationStatus.FAILED,
+            errors=["ffprobe returned no stdout"],
         )
 
     try:
