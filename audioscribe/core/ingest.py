@@ -44,6 +44,7 @@ def _ensure_mp3_ext(name: str) -> str:
 def ingest(
     inputs: List[str],
     output_dir: str,
+    allow_playlist: bool = False,
     save_as: Optional[str] = None,
     on_event: Optional[EventCallback] = None,
     store: Optional[JobStore] = None,
@@ -83,8 +84,6 @@ def ingest(
 
     store.update_job(job_id, {"status": "running"})
 
-    allow_playlist = True  # UI supports playlist URL paste
-
     _emit(
         on_event,
         {
@@ -113,13 +112,26 @@ def ingest(
         return bool(it.get("ok"))
 
     all_ok = bool(src_items) and all(_item_is_ok_or_warning(it) for it in src_items)
+    requires_confirmation = bool(job_summary.get("requires_confirmation"))
 
     response: Dict[str, Any] = {
         "ok": all_ok,
-        "message": "ingest completed" if all_ok else "ingest completed with errors",
+        "message": (
+            job_summary.get("message")
+            if requires_confirmation
+            else ("ingest completed" if all_ok else "ingest completed with errors")
+        ),
         "job_id": real_job_id,
         "items": [],
     }
+
+    if requires_confirmation:
+        response["input_urls_count"] = job_summary.get("input_urls_count")
+        response["expanded_urls_count"] = job_summary.get("expanded_urls_count")
+        response["requires_confirmation"] = True
+        response["next_command"] = job_summary.get("next_command")
+        response["errors"] = job_summary.get("errors") or []
+
     if warnings_top:
         response["warnings"] = warnings_top
 

@@ -3,7 +3,7 @@ from pathlib import Path
 import typer
 import json
 
-from audioscribe.core import create_job as core_create_job, process_job as core_process_job
+from audioscribe.core.ingest import ingest as core_ingest
 from audioscribe.core.verification_schema import normalize_verification
 from audioscribe.core.verify_audio import verify_audio
 from dataclasses import asdict, is_dataclass
@@ -41,15 +41,23 @@ def ingest_cmd(
         "--allow-playlist",
         help="Allow downloading multiple items when a playlist is detected/expanded.",
     ),
+    output_dir: str = typer.Option(
+        "outputs",
+        "--output-dir",
+        help="Directory where audio files are saved.",
+    ),
 ):
-    """Ingest URLs (create job + process)."""
-    result = core_create_job(urls)
+    """Ingest URLs."""
+    result = core_ingest(
+        inputs=urls,
+        output_dir=output_dir,
+        allow_playlist=allow_playlist,
+    )
+
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
-    if result.get("ok"):
-        job_id = result["job_id"]
-        print(json.dumps(core_process_job(job_id, allow_playlist=allow_playlist), indent=2, ensure_ascii=False))
-        print(f"job_id={job_id}")
+    if result.get("job_id"):
+        print(f"job_id={result['job_id']}")
 
 
 @app.command("status")
