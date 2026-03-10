@@ -209,8 +209,15 @@ def _process_one_url(
         "job_id": job_id,
         "index": index,
         "url": url,
+
         "mp3_path": None,
         "mp3_exists": False,
+
+        # metadata (C3_SL12)
+        "title": None,
+        "channel": None,
+        "duration_seconds": None,
+
         "verification": normalize_verification(
             status="failed",
             path=None,
@@ -227,6 +234,11 @@ def _process_one_url(
         *(["--extractor-args", "youtube:player_client=android"] if not settings.cookies_from_browser else []),
         "-x",
         "--audio-format", "mp3",
+        "--print", "before_dl:url",
+        "--print", "title",
+        "--print", "channel",
+        "--print", "uploader",
+        "--print", "duration",
         "--print", "after_move:filepath",
         "-o", out_template,
         *(["--cookies-from-browser", settings.cookies_from_browser] if settings.cookies_from_browser else []),
@@ -273,7 +285,71 @@ def _process_one_url(
 
     # yt-dlp prints the final filepath via after_move:filepath
     raw_out = (completed.stdout or "").strip()
-    mp3_path = raw_out.splitlines()[-1].strip() if raw_out else ""
+    lines = [line.strip() for line in raw_out.splitlines() if line.strip()]
+
+    title = None
+    channel = None
+    duration_seconds = None
+    mp3_path = ""
+
+    if len(lines) >= 5:
+        title = lines[0] or None
+
+        second = lines[1]
+        third = lines[2]
+        fourth = lines[3]
+        last = lines[-1]
+
+        if second.isdigit():
+            # shape:
+            # title
+            # duration
+            # resolved media url
+            # filepath
+            raw_duration = second
+            try:
+                duration_seconds = int(raw_duration) if raw_duration else None
+            except ValueError:
+                duration_seconds = None
+
+            mp3_path = last or ""
+
+        elif third.isdigit():
+            # shape:
+            # title
+            # uploader
+            # duration
+            # resolved media url
+            # filepath
+            channel = second or None
+
+            raw_duration = third
+            try:
+                duration_seconds = int(raw_duration) if raw_duration else None
+            except ValueError:
+                duration_seconds = None
+
+            mp3_path = last or ""
+
+        else:
+            # shape:
+            # title
+            # channel
+            # uploader
+            # duration
+            # resolved media url
+            # filepath
+            channel = second or third or None
+
+            raw_duration = fourth
+            try:
+                duration_seconds = int(raw_duration) if raw_duration else None
+            except ValueError:
+                duration_seconds = None
+
+            mp3_path = last or ""
+    elif lines:
+        mp3_path = lines[-1]
 
     # yt-dlp sometimes prints quotes around the filepath on Windows
     if mp3_path.startswith('"') and mp3_path.endswith('"'):
@@ -314,6 +390,9 @@ def _process_one_url(
     item["mp3_path"] = mp3_path or None
     item["mp3_exists"] = mp3_exists
     item["debug"] = debug
+    item["title"] = title
+    item["channel"] = channel
+    item["duration_seconds"] = duration_seconds
 
     verification_payload = normalize_verification(
         status="failed",
