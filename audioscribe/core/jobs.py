@@ -21,6 +21,7 @@ from uuid import uuid4
 from urllib.parse import urlparse, parse_qs
 from audioscribe.core.verification_schema import normalize_verification
 from audioscribe.core.config import get_settings
+from audioscribe.core.metadata import extract_source_info, normalize_source_metadata
 
 
 @dataclass(frozen=True)
@@ -463,6 +464,12 @@ def _process_one_url(
     """
     item = _make_initial_item(job_id=job_id, index=index, url=url)
 
+    source_info = {}
+    try:
+        source_info = extract_source_info(url, settings)
+    except Exception:
+        source_info = {}
+
     cmd = _build_download_command(
         url=url,
         settings=settings,
@@ -505,7 +512,15 @@ def _process_one_url(
             "stderr_tail": (completed.stderr or "")[-400:],
         }
 
-    metadata = _build_metadata(title, channel, duration_seconds, url)
+    metadata = normalize_source_metadata(
+        source_info,
+        source_url=url,
+        mp3_path=mp3_path if mp3_exists else None,
+    )
+
+    title = metadata["title"]
+    channel = metadata["channel"]
+    duration_seconds = metadata["duration_seconds"]
 
     verification_payload = normalize_verification(
         status="failed",
