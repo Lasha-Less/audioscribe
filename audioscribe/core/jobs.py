@@ -70,16 +70,6 @@ def _extract_youtube_id(url: str) -> str | None:
     return None
 
 
-def _build_metadata(title, channel, duration_seconds, url):
-    return {
-        "title": title,
-        "channel": channel,
-        "duration_seconds": duration_seconds,
-        "video_id": _extract_youtube_id(url),
-        "source_url": url,
-    }
-
-
 def _is_playlist_url(url: str) -> bool:
     # Minimal heuristic: playlist context in query params
     return "list=" in (url or "")
@@ -237,10 +227,6 @@ def _build_download_command(*, url: str, settings, out_template: str) -> list[st
         "-x",
         "--audio-format", "mp3",
         "--print", "before_dl:url",
-        "--print", "title",
-        "--print", "channel",
-        "--print", "uploader",
-        "--print", "duration",
         "--print", "after_move:filepath",
         "-o", out_template,
         *(["--cookies-from-browser", settings.cookies_from_browser] if settings.cookies_from_browser else []),
@@ -259,80 +245,16 @@ def _run_download(cmd: list[str]) -> subprocess.CompletedProcess:
     )
 
 
-def _parse_download_stdout(stdout: str) -> tuple[str | None, str | None, int | None, str]:
+def _parse_download_stdout(stdout: str) -> str:
     raw_out = (stdout or "").strip()
     lines = [line.strip() for line in raw_out.splitlines() if line.strip()]
 
-    title = None
-    channel = None
-    duration_seconds = None
-    mp3_path = ""
+    mp3_path = lines[-1] if lines else ""
 
-    if len(lines) >= 5:
-        title = lines[0] or None
-
-        second = lines[1]
-        third = lines[2]
-        fourth = lines[3]
-        last = lines[-1]
-
-        if second.isdigit():
-            # shape:
-            # title
-            # duration
-            # resolved media url
-            # filepath
-            raw_duration = second
-            try:
-                duration_seconds = int(raw_duration) if raw_duration else None
-            except ValueError:
-                duration_seconds = None
-
-            mp3_path = last or ""
-
-        elif third.isdigit():
-            # shape:
-            # title
-            # uploader
-            # duration
-            # resolved media url
-            # filepath
-            channel = second or None
-
-            raw_duration = third
-            try:
-                duration_seconds = int(raw_duration) if raw_duration else None
-            except ValueError:
-                duration_seconds = None
-
-            mp3_path = last or ""
-
-        else:
-            # shape:
-            # title
-            # channel
-            # uploader
-            # duration
-            # resolved media url
-            # filepath
-            channel = second or third or None
-
-            raw_duration = fourth
-            try:
-                duration_seconds = int(raw_duration) if raw_duration else None
-            except ValueError:
-                duration_seconds = None
-
-            mp3_path = last or ""
-
-    elif lines:
-        mp3_path = lines[-1]
-
-    # yt-dlp sometimes prints quotes around the filepath on Windows
     if mp3_path.startswith('"') and mp3_path.endswith('"'):
         mp3_path = mp3_path[1:-1].strip()
 
-    return title, channel, duration_seconds, mp3_path
+    return mp3_path
 
 
 def _resolve_mp3_path(mp3_path: str, url: str, out_dir: Path) -> tuple[str, bool]:
@@ -502,7 +424,7 @@ def _process_one_url(
             debug={"error": str(e)},
         )
 
-    title, channel, duration_seconds, mp3_path = _parse_download_stdout(completed.stdout)
+    mp3_path = _parse_download_stdout(completed.stdout)
     mp3_path, mp3_exists = _resolve_mp3_path(mp3_path, url, out_dir)
 
     debug = None
