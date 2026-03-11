@@ -69,6 +69,16 @@ def _extract_youtube_id(url: str) -> str | None:
     return None
 
 
+def _build_metadata(title, channel, duration_seconds, url):
+    return {
+        "title": title,
+        "channel": channel,
+        "duration_seconds": duration_seconds,
+        "video_id": _extract_youtube_id(url),
+        "source_url": url,
+    }
+
+
 def _is_playlist_url(url: str) -> bool:
     # Minimal heuristic: playlist context in query params
     return "list=" in (url or "")
@@ -217,6 +227,7 @@ def _process_one_url(
         "title": None,
         "channel": None,
         "duration_seconds": None,
+        "metadata": None,
 
         "verification": normalize_verification(
             status="failed",
@@ -387,12 +398,15 @@ def _process_one_url(
             "stderr_tail": (completed.stderr or "")[-400:],
         }
 
+    metadata = _build_metadata(title, channel, duration_seconds, url)
+
     item["mp3_path"] = mp3_path or None
     item["mp3_exists"] = mp3_exists
     item["debug"] = debug
-    item["title"] = title
-    item["channel"] = channel
-    item["duration_seconds"] = duration_seconds
+    item["title"] = metadata["title"]
+    item["channel"] = metadata["channel"]
+    item["duration_seconds"] = metadata["duration_seconds"]
+    item["metadata"] = metadata
 
     verification_payload = normalize_verification(
         status="failed",

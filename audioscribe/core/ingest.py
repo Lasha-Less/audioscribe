@@ -162,6 +162,7 @@ def ingest(
             "title": it.get("title"),
             "channel": it.get("channel"),
             "duration_seconds": it.get("duration_seconds"),
+            "metadata": it.get("metadata"),
             "warnings": v_warnings,
             "error": None
             if item_ok
