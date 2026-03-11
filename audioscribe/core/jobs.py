@@ -200,20 +200,8 @@ def _make_output_dir_and_template() -> tuple[Path, str]:
     return out_dir, out_template
 
 
-def _process_one_url(
-    *,
-    job_id: str,
-    url: str,
-    index: int,
-    settings,
-    out_dir: Path,
-    out_template: str,
-) -> dict:
-    """
-    Download one URL via yt-dlp and verify the produced MP3.
-    Returns canonical per-item structure (stable keys).
-    """
-    item = {
+def _make_initial_item(*, job_id: str, index: int, url: str) -> dict:
+    return {
         "ok": False,
         "message": "",
         "job_id": job_id,
@@ -239,7 +227,9 @@ def _process_one_url(
         "debug": None,
     }
 
-    cmd = [
+
+def _build_download_command(*, url: str, settings, out_template: str) -> list[str]:
+    return [
         "yt-dlp",
         "--windows-filenames",
         *(["--extractor-args", "youtube:player_client=android"] if not settings.cookies_from_browser else []),
@@ -256,46 +246,20 @@ def _process_one_url(
         url,
     ]
 
-    try:
-        completed = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except FileNotFoundError:
-        item["message"] = "yt-dlp not found. Is it installed in this venv?"
-        item["verification"] = normalize_verification(
-            status="failed",
-            path=None,
-            metrics=None,
-            warnings=[],
-            errors=["yt-dlp not found"],
-        )
-        return item
-    except subprocess.CalledProcessError as e:
-        item["message"] = "yt-dlp failed"
-        item["debug"] = {
-            "stdout_tail": (e.stdout or "")[-400:],
-            "stderr_tail": (e.stderr or "")[-400:],
-        }
-        item["verification"] = normalize_verification(
-            status="failed",
-            path=None,
-            metrics=None,
-            warnings=[],
-            errors=["yt-dlp failed"],
-        )
-        return item
-    except Exception as e:
-        item["message"] = "download failed"
-        item["debug"] = {"error": str(e)}
-        item["verification"] = normalize_verification(
-            status="failed",
-            path=None,
-            metrics=None,
-            warnings=[],
-            errors=[str(e)],
-        )
-        return item
 
-    # yt-dlp prints the final filepath via after_move:filepath
-    raw_out = (completed.stdout or "").strip()
+def _run_download(cmd: list[str]) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+
+def _parse_download_stdout(stdout: str) -> tuple[str | None, str | None, int | None, str]:
+    raw_out = (stdout or "").strip()
     lines = [line.strip() for line in raw_out.splitlines() if line.strip()]
 
     title = None
@@ -359,6 +323,7 @@ def _process_one_url(
                 duration_seconds = None
 
             mp3_path = last or ""
+
     elif lines:
         mp3_path = lines[-1]
 
@@ -366,6 +331,10 @@ def _process_one_url(
     if mp3_path.startswith('"') and mp3_path.endswith('"'):
         mp3_path = mp3_path[1:-1].strip()
 
+    return title, channel, duration_seconds, mp3_path
+
+
+def _resolve_mp3_path(mp3_path: str, url: str, out_dir: Path) -> tuple[str, bool]:
     mp3_exists = False
     mp3_path_obj: Path | None = None
 
@@ -388,8 +357,146 @@ def _process_one_url(
             )
             if candidates:
                 mp3_path_obj = candidates[0]
-                mp3_path = str(mp3_path_obj)
+                mp3_path = str(mp3_path_obj.resolve())
                 mp3_exists = True
+
+    return mp3_path, mp3_exists
+
+
+def _build_download_failure_item(
+    *,
+    item: dict,
+    message: str,
+    errors: list[str],
+    debug: dict | None = None,
+) -> dict:
+    item["message"] = message
+    item["debug"] = debug
+    item["verification"] = normalize_verification(
+        status="failed",
+        path=None,
+        metrics=None,
+        warnings=[],
+        errors=errors,
+    )
+    return item
+
+
+def _run_and_normalize_verification(mp3_path: str) -> dict:
+    from audioscribe.core.verify_audio import verify_audio
+
+    try:
+        verification = verify_audio(mp3_path)
+    except Exception as e:
+        return normalize_verification(
+            status="failed",
+            path=mp3_path,
+            metrics=None,
+            warnings=[],
+            errors=[str(e)],
+        )
+
+    if isinstance(verification, dict):
+        return normalize_verification(
+            status=verification.get("status"),
+            path=verification.get("path") or mp3_path,
+            metrics=verification.get("metrics"),
+            warnings=verification.get("warnings"),
+            errors=verification.get("errors"),
+        )
+
+    metrics = getattr(verification, "metrics", None)
+    return normalize_verification(
+        status=getattr(getattr(verification, "status", None), "value", None),
+        path=mp3_path,
+        metrics={
+            "duration_s": getattr(metrics, "duration_s", None) if metrics else None,
+            "sample_rate_hz": getattr(metrics, "sample_rate_hz", None) if metrics else None,
+            "bitrate_kbps": getattr(metrics, "bitrate_kbps", None) if metrics else None,
+            "channels": getattr(metrics, "channels", None) if metrics else None,
+            "file_size_bytes": getattr(metrics, "file_size_bytes", None) if metrics else None,
+        },
+        warnings=getattr(verification, "warnings", None),
+        errors=getattr(verification, "errors", None),
+    )
+
+
+def _finalize_processed_item(
+    *,
+    item: dict,
+    mp3_path: str,
+    mp3_exists: bool,
+    debug: dict | None,
+    title: str | None,
+    channel: str | None,
+    duration_seconds: int | None,
+    metadata: dict,
+    verification_payload: dict,
+) -> dict:
+    item["mp3_path"] = str(Path(mp3_path).relative_to(Path.cwd())) if mp3_exists else mp3_path
+    item["mp3_exists"] = mp3_exists
+    item["debug"] = debug
+
+    item["title"] = title
+    item["channel"] = channel
+    item["duration_seconds"] = duration_seconds
+    item["metadata"] = metadata
+
+    item["verification"] = verification_payload
+    item["ok"] = mp3_exists and verification_payload["status"] != "failed"
+    item["message"] = "downloaded mp3 (minimal)"
+    return item
+
+
+def _process_one_url(
+    *,
+    job_id: str,
+    url: str,
+    index: int,
+    settings,
+    out_dir: Path,
+    out_template: str,
+) -> dict:
+    """
+    Download one URL via yt-dlp and verify the produced MP3.
+    Returns canonical per-item structure (stable keys).
+    """
+    item = _make_initial_item(job_id=job_id, index=index, url=url)
+
+    cmd = _build_download_command(
+        url=url,
+        settings=settings,
+        out_template=out_template,
+    )
+
+    try:
+        completed = _run_download(cmd)
+    except FileNotFoundError:
+        return _build_download_failure_item(
+            item=item,
+            message="yt-dlp not found. Is it installed in this venv?",
+            errors=["yt-dlp not found"],
+        )
+    except subprocess.CalledProcessError as e:
+        return _build_download_failure_item(
+            item=item,
+            message="yt-dlp failed",
+            errors=["yt-dlp failed"],
+            debug={
+                "stdout_tail": (e.stdout or "")[-400:],
+                "stderr_tail": (e.stderr or "")[-400:],
+            },
+        )
+    except Exception as e:
+        return _build_download_failure_item(
+            item=item,
+            message="download failed",
+            errors=[str(e)],
+            debug={"error": str(e)},
+        )
+
+    title, channel, duration_seconds, mp3_path = _parse_download_stdout(completed.stdout)
+    mp3_path, mp3_exists = _resolve_mp3_path(mp3_path, url, out_dir)
 
     debug = None
     if not mp3_exists:
@@ -400,14 +507,6 @@ def _process_one_url(
 
     metadata = _build_metadata(title, channel, duration_seconds, url)
 
-    item["mp3_path"] = mp3_path or None
-    item["mp3_exists"] = mp3_exists
-    item["debug"] = debug
-    item["title"] = metadata["title"]
-    item["channel"] = metadata["channel"]
-    item["duration_seconds"] = metadata["duration_seconds"]
-    item["metadata"] = metadata
-
     verification_payload = normalize_verification(
         status="failed",
         path=mp3_path if mp3_path else None,
@@ -417,37 +516,19 @@ def _process_one_url(
     )
 
     if mp3_exists:
-        from audioscribe.core.verify_audio import verify_audio  # local import keeps startup simple
-        verification = verify_audio(mp3_path)
+        verification_payload = _run_and_normalize_verification(mp3_path)
 
-        if isinstance(verification, dict):
-            verification_payload = normalize_verification(
-                status=verification.get("status"),
-                path=verification.get("path") or mp3_path,
-                metrics=verification.get("metrics"),
-                warnings=verification.get("warnings"),
-                errors=verification.get("errors"),
-            )
-        else:
-            metrics = getattr(verification, "metrics", None)
-            verification_payload = normalize_verification(
-                status=getattr(getattr(verification, "status", None), "value", None),
-                path=mp3_path,
-                metrics={
-                    "duration_s": getattr(metrics, "duration_s", None) if metrics else None,
-                    "sample_rate_hz": getattr(metrics, "sample_rate_hz", None) if metrics else None,
-                    "bitrate_kbps": getattr(metrics, "bitrate_kbps", None) if metrics else None,
-                    "channels": getattr(metrics, "channels", None) if metrics else None,
-                    "file_size_bytes": getattr(metrics, "file_size_bytes", None) if metrics else None,
-                },
-                warnings=getattr(verification, "warnings", None),
-                errors=getattr(verification, "errors", None),
-            )
-
-    item["verification"] = verification_payload
-    item["ok"] = (verification_payload.get("status") == "ok")
-    item["message"] = "processed" if item["ok"] else "processed with issues"
-    return item
+    return _finalize_processed_item(
+        item=item,
+        mp3_path=mp3_path,
+        mp3_exists=mp3_exists,
+        debug=debug,
+        title=title,
+        channel=channel,
+        duration_seconds=duration_seconds,
+        metadata=metadata,
+        verification_payload=verification_payload,
+    )
 
 
 def _summarize_job(
