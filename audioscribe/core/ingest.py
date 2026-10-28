@@ -59,7 +59,7 @@ def ingest(
     - Returns stable JSON keys
     """
     urls = _split_inputs(inputs)
-    _ = str(Path(output_dir).expanduser().resolve())  # reserved for later (UI uses it)
+#    _ = str(Path(output_dir).expanduser().resolve())  # reserved for later (UI uses it)
 
     if store is None:
         store = InMemoryJobStore()
@@ -114,6 +114,7 @@ def ingest(
         job_id,
         allow_playlist=allow_playlist,
         store=store,
+        output_dir=output_dir,
     )
     src_items = job_summary.get("items") or []
 

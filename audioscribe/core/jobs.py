@@ -177,9 +177,11 @@ def _resolve_work_urls(
     return work_urls, errors, None
 
 
-def _make_output_dir_and_template() -> tuple[Path, str]:
-    """Create outputs directory (if needed) and return (out_dir, out_template)."""
-    out_dir = Path("outputs")
+def _make_output_dir_and_template(
+    output_dir: str | Path = "outputs",
+) -> tuple[Path, str]:
+    """Create the chosen output directory and build the filename template."""
+    out_dir = Path(output_dir).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     out_template = str(out_dir / "%(title)s [%(id)s].%(ext)s")
     return out_dir, out_template
@@ -350,7 +352,7 @@ def _finalize_processed_item(
     metadata: dict,
     verification_payload: dict,
 ) -> dict:
-    item["mp3_path"] = str(Path(mp3_path).relative_to(Path.cwd())) if mp3_exists else mp3_path
+    item["mp3_path"] = str(Path(mp3_path).resolve()) if mp3_exists else mp3_path
     item["mp3_exists"] = mp3_exists
     item["debug"] = debug
 
@@ -533,6 +535,7 @@ def process_job(
     allow_playlist: bool = False,
     *,
     store: JobStore | None = None,
+    output_dir: str | Path = "outputs",
 ) -> dict:
     """Download and verify the URLs belonging to an existing job."""
     active_store = store if store is not None else _DEFAULT_STORE
@@ -562,7 +565,7 @@ def process_job(
         blocked["job_id"] = job_id
         return blocked
 
-    out_dir, out_template = _make_output_dir_and_template()
+    out_dir, out_template = _make_output_dir_and_template(output_dir)
 
     active_store.replace_items(job_id, work_urls)
     stored_items = active_store.list_items(job_id)
