@@ -4,7 +4,7 @@ from audioscribe.core import jobs as core_jobs
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
-
+from datetime import datetime, timezone
 from audioscribe.storage.memory_job_store import InMemoryJobStore
 from audioscribe.storage.job_store import JobStore
 import re
@@ -69,6 +69,13 @@ def ingest(
 
     # Base response skeleton (stable keys)
     if not urls:
+        store.update_job(
+            job_id,
+            {
+                "status": "failed",
+                "finished_at": datetime.now(timezone.utc),
+            },
+        )
         return {
             "ok": False,
             "message": "no urls provided",
@@ -82,7 +89,13 @@ def ingest(
         warnings_top.append("save_as ignored: only allowed for single-url ingest")
         save_as = None
 
-    store.update_job(job_id, {"status": "running"})
+    store.update_job(
+        job_id,
+        {
+            "status": "running",
+            "started_at": datetime.now(timezone.utc),
+        },
+    )
 
     _emit(
         on_event,
@@ -96,11 +109,12 @@ def ingest(
         },
     )
 
-    # Use existing job pipeline (source of truth for download+verify)
-    created = core_jobs.create_job(urls)  # returns dict
-    real_job_id = created.get("job_id") or job_id
-
-    job_summary = core_jobs.process_job(real_job_id, allow_playlist=allow_playlist)
+    # Process the job already created in this store.
+    job_summary = core_jobs.process_job(
+        job_id,
+        allow_playlist=allow_playlist,
+        store=store,
+    )
     src_items = job_summary.get("items") or []
 
     # Authoritative overall success: all items ok OR warning (and at least one item exists)
@@ -121,16 +135,44 @@ def ingest(
             if requires_confirmation
             else ("ingest completed" if all_ok else "ingest completed with errors")
         ),
-        "job_id": real_job_id,
+        "job_id": job_id,
         "items": [],
     }
 
     if requires_confirmation:
-        response["input_urls_count"] = job_summary.get("input_urls_count")
-        response["expanded_urls_count"] = job_summary.get("expanded_urls_count")
-        response["requires_confirmation"] = True
-        response["next_command"] = job_summary.get("next_command")
-        response["errors"] = job_summary.get("errors") or []
+        store.update_job(
+            job_id,
+            {
+                "status": "awaiting_confirmation",
+                "finished_at": None,
+            },
+        )
+        response.update(
+            {
+                "input_urls_count": job_summary.get("input_urls_count"),
+                "expanded_urls_count": job_summary.get("expanded_urls_count"),
+                "requires_confirmation": True,
+                "next_command": job_summary.get("next_command"),
+                "errors": job_summary.get("errors") or [],
+            }
+        )
+
+        if warnings_top:
+            response["warnings"] = warnings_top
+
+        _emit(
+            on_event,
+            {
+                "type": "progress",
+                "job_id": job_id,
+                "url": None,
+                "stage": "awaiting_confirmation",
+                "percent": None,
+                "message": "Playlist confirmation required.",
+            },
+        )
+        return response
+
 
     if warnings_top:
         response["warnings"] = warnings_top
@@ -178,7 +220,7 @@ def ingest(
             on_event,
             {
                 "type": "progress",
-                "job_id": real_job_id,
+                "job_id": job_id,
                 "url": url,
                 "stage": "finished" if item_ok else "failed",
                 "percent": 100 if item_ok else None,
@@ -220,7 +262,7 @@ def ingest(
         on_event,
         {
             "type": "progress",
-            "job_id": real_job_id,
+            "job_id": job_id,
             "url": None,
             "stage": "finished" if all_ok else "failed",
             "percent": 100 if all_ok else None,
@@ -235,6 +277,7 @@ def ingest(
             "status": "done" if all_ok else "failed",
             "succeeded": sum(1 for it in src_items if bool(it.get("ok"))),
             "failed": sum(1 for it in src_items if not bool(it.get("ok"))),
+            "finished_at": datetime.now(timezone.utc),
         },
     )
 

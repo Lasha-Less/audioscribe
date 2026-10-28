@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ class InMemoryJobStore(JobStore):
 
     def create_job(self, urls: List[str]) -> str:
         job_id = str(uuid4())
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         job = Job(
             job_id=job_id,
@@ -57,6 +57,32 @@ class InMemoryJobStore(JobStore):
             raise KeyError(f"job not found: {job_id}")
         return list(self._items_by_job[job_id])
 
+    def replace_items(self, job_id: str, urls: List[str]) -> None:
+        """Set the items to process after URL resolution."""
+        self.get_job(job_id)
+
+        items = [
+            JobItem(
+                item_id=str(uuid4()),
+                job_id=job_id,
+                url=url,
+                status="pending",
+                warnings=[],
+                extra={},
+            )
+            for url in urls
+        ]
+
+        self._items_by_job[job_id] = items
+        self.update_job(
+            job_id,
+            {
+                "total": len(items),
+                "succeeded": 0,
+                "failed": 0,
+            },
+        )
+
     def update_job(self, job_id: str, patch: Dict[str, Any]) -> None:
         job = self.get_job(job_id)
         updated = job
@@ -66,13 +92,13 @@ class InMemoryJobStore(JobStore):
             updated = replace(updated, **{k: v})
         self._jobs[job_id] = updated
 
-    def update_item(self, job_id: str, url: str, patch: Dict[str, Any]) -> None:
+    def update_item(self, job_id: str, item_id: str, patch: Dict[str, Any]) -> None:
         items = self.list_items(job_id)
         found = False
 
         new_items: List[JobItem] = []
         for it in items:
-            if it.url == url and not found:
+            if it.item_id == item_id and not found:
                 updated = it
                 for k, v in patch.items():
                     if not hasattr(updated, k):
@@ -84,6 +110,8 @@ class InMemoryJobStore(JobStore):
                 new_items.append(it)
 
         if not found:
-            raise KeyError(f"item not found for job_id={job_id}, url={url}")
+            raise KeyError(
+                f"item not found for job_id={job_id}, item_id={item_id}"
+            )
 
         self._items_by_job[job_id] = new_items

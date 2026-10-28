@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Protocol
 @dataclass(frozen=True)
 class Job:
     job_id: str
-    status: str  # "created" | "running" | "done" | "failed"
+    status: str  # "created" | "running" | "awaiting_confirmation" | "done" | "failed"
     created_at: datetime
     started_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
@@ -47,8 +47,11 @@ class JobStore(Protocol):
     def list_items(self, job_id: str) -> List[JobItem]:
         ...
 
+    def replace_items(self, job_id: str, urls: List[str]) -> None:
+        ...
+
     def update_job(self, job_id: str, patch: Dict[str, Any]) -> None:
         ...
 
-    def update_item(self, job_id: str, url: str, patch: Dict[str, Any]) -> None:
+    def update_item(self, job_id: str, item_id: str, patch: Dict[str, Any]) -> None:
         ...

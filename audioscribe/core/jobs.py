@@ -14,39 +14,33 @@ Non-goals:
 
 from __future__ import annotations
 import subprocess
-from dataclasses import dataclass
+#from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-from uuid import uuid4
+#from uuid import uuid4
 from urllib.parse import urlparse, parse_qs
 from audioscribe.core.verification_schema import normalize_verification
 from audioscribe.core.config import get_settings
 from audioscribe.core.metadata import extract_source_info, normalize_source_metadata
+from audioscribe.storage.job_store import JobStore
+from audioscribe.storage.memory_job_store import InMemoryJobStore
 
 
-@dataclass(frozen=True)
-class Job:
-    job_id: str
-    urls: list[str]
+_DEFAULT_STORE = InMemoryJobStore()
 
 
-# In-memory placeholder store (slice-safe: no DB yet)
-_JOBS: dict[str, Job] = {}
-
-
-def create_job(urls: Iterable[str]) -> dict:
-    """
-    Create a job for ingesting a set of URLs.
-    Placeholder implementation: stores job in memory only.
-    """
-    url_list = [u.strip() for u in urls if str(u).strip()]
-    job_id = str(uuid4())
-
-    _JOBS[job_id] = Job(job_id=job_id, urls=url_list)
+def create_job(
+    urls: Iterable[str],
+    *,
+    store: JobStore | None = None,
+) -> dict:
+    active_store = store if store is not None else _DEFAULT_STORE
+    url_list = [url.strip() for url in urls if url.strip()]
+    job_id = active_store.create_job(url_list)
 
     return {
         "ok": True,
-        "message": "job created (placeholder)",
+        "message": "job created",
         "job_id": job_id,
         "count": len(url_list),
     }
@@ -496,27 +490,73 @@ def _summarize_job(
         "items": items,
     }
 
+def _store_item_result(
+    store: JobStore,
+    job_id: str,
+    item_id: str,
+    result: dict,
+) -> None:
+    verification = result.get("verification") or {}
+    succeeded = bool(result.get("ok"))
+    errors = verification.get("errors") or []
 
-def process_job(job_id: str, allow_playlist: bool = False) -> dict:
-    """
-    Process a job end-to-end (sequential).
-    High-level flow:
-      1) validate job
-      2) resolve URLs (playlist expansion + guard)
-      3) download + verify each item
-      4) return summary with stable schema
-    """
-    job = _JOBS.get(job_id)
-    if not job:
-        return _job_error_response(job_id, "job not found", ["job not found"])
+    error_message = None
+    if not succeeded:
+        error_message = (
+            "; ".join(str(error) for error in errors)
+            or result.get("message")
+            or "processing failed"
+        )
 
-    if not job.urls:
-        return _job_error_response(job_id, "no urls in job", ["no urls in job"])
+    store.update_item(
+        job_id,
+        item_id,
+        {
+            "status": "done" if succeeded else "failed",
+            "mp3_path": result.get("mp3_path"),
+            "title": result.get("title"),
+            "channel": result.get("channel"),
+            "duration_seconds": result.get("duration_seconds"),
+            "warnings": list(verification.get("warnings") or []),
+            "error_code": None if succeeded else "INGEST_FAILED",
+            "error_message": error_message,
+            "extra": {
+                "verification": verification,
+                "metadata": result.get("metadata"),
+                "debug": result.get("debug"),
+            },
+        },
+    )
+
+def process_job(
+    job_id: str,
+    allow_playlist: bool = False,
+    *,
+    store: JobStore | None = None,
+) -> dict:
+    """Download and verify the URLs belonging to an existing job."""
+    active_store = store if store is not None else _DEFAULT_STORE
+
+    try:
+        active_store.get_job(job_id)
+        urls = [item.url for item in active_store.list_items(job_id)]
+    except KeyError:
+        return _job_error_response(
+            job_id, "job not found", ["job not found"]
+        )
+
+    if not urls:
+        return _job_error_response(
+            job_id, "no urls in job", ["no urls in job"]
+        )
 
     settings = get_settings()
-    input_urls_count = len(job.urls)
+    input_urls_count = len(urls)
 
-    work_urls, resolution_errors, blocked = _resolve_work_urls(job.urls, settings, allow_playlist)
+    work_urls, resolution_errors, blocked = _resolve_work_urls(
+        urls, settings, allow_playlist
+    )
+
 
     if blocked is not None:
         blocked["job_id"] = job_id
@@ -524,17 +564,34 @@ def process_job(job_id: str, allow_playlist: bool = False) -> dict:
 
     out_dir, out_template = _make_output_dir_and_template()
 
-    items = [
-        _process_one_url(
+    active_store.replace_items(job_id, work_urls)
+    stored_items = active_store.list_items(job_id)
+    items = []
+
+    for index, stored_item in enumerate(stored_items):
+        active_store.update_item(
+            job_id,
+            stored_item.item_id,
+            {"status": "running"},
+        )
+
+        result = _process_one_url(
             job_id=job_id,
-            url=url,
+            url=stored_item.url,
             index=index,
             settings=settings,
             out_dir=out_dir,
             out_template=out_template,
         )
-        for index, url in enumerate(work_urls)
-    ]
+        result["item_id"] = stored_item.item_id
+
+        _store_item_result(
+            active_store,
+            job_id,
+            stored_item.item_id,
+            result,
+        )
+        items.append(result)
 
     return _summarize_job(
         job_id=job_id,
@@ -546,15 +603,27 @@ def process_job(job_id: str, allow_playlist: bool = False) -> dict:
 
 
 
-def get_job_status(job_id: str) -> dict:
-    """
-    Return job status.
-    Placeholder implementation: only indicates existence for now.
-    """
-    exists = job_id in _JOBS
+def get_job_status(
+    job_id: str,
+    *,
+    store: JobStore | None = None,
+) -> dict:
+    active_store = store if store is not None else _DEFAULT_STORE
+
+    try:
+        job = active_store.get_job(job_id)
+    except KeyError:
+        return {
+            "ok": False,
+            "message": "job not found",
+            "job_id": job_id,
+            "exists": False,
+        }
+
     return {
         "ok": True,
-        "message": "status placeholder",
+        "message": "job found",
         "job_id": job_id,
-        "exists": exists,
+        "exists": True,
+        "status": job.status,
     }
