@@ -118,26 +118,20 @@ def ingest(
     )
     src_items = job_summary.get("items") or []
 
-    # Authoritative overall success: all items ok OR warning (and at least one item exists)
-    def _item_is_ok_or_warning(it: dict) -> bool:
-        verification = it.get("verification") or {}
-        v_status = verification.get("status")
-        if v_status in ("ok", "warning"):
-            return True
-        return bool(it.get("ok"))
-
-    all_ok = bool(src_items) and all(_item_is_ok_or_warning(it) for it in src_items)
+    # Use the overall result calculated by the processing pipeline.
+    all_ok = bool(job_summary.get("ok"))
     requires_confirmation = bool(job_summary.get("requires_confirmation"))
 
     response: Dict[str, Any] = {
         "ok": all_ok,
         "message": (
             job_summary.get("message")
-            if requires_confirmation
+            if requires_confirmation or not src_items
             else ("ingest completed" if all_ok else "ingest completed with errors")
         ),
         "job_id": job_id,
         "items": [],
+        "errors": job_summary.get("errors") or [],
     }
 
     if requires_confirmation:
@@ -184,16 +178,11 @@ def ingest(
         v_status = verification.get("status")  # "ok" | "warning" | "failed"
         v_warnings = verification.get("warnings") or []
 
-        download_succeeded = bool(it.get("mp3_exists")) or bool(it.get("mp3_path"))
+        item_ok = bool(it.get("ok"))
 
-        if v_status == "warning" and download_succeeded:
-            item_ok = True
-            status = "warning"
-        elif bool(it.get("ok")) and download_succeeded:
-            item_ok = True
-            status = "done"
+        if item_ok:
+            status = "warning" if v_status == "warning" else "done"
         else:
-            item_ok = False
             status = "failed"
 
         item_result = {

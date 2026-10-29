@@ -58,6 +58,7 @@ def ingest_cmd(
 
     if result.get("job_id"):
         print(f"job_id={result['job_id']}")
+    raise typer.Exit(code=0 if result.get("ok") else 1)
 
 
 @app.command("status")

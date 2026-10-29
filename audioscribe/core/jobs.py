@@ -144,13 +144,24 @@ def _resolve_work_urls(
             # Why: --flat-playlist avoids downloading media during expansion; we only need IDs.
             expanded, debug = _expand_playlist_to_video_urls(u, settings)
 
-            # If expansion fails or yields nothing, fall back to treating URL as a single item.
-            # We still record a diagnostic note so future debugging is possible.
+            # Stop before downloading if the playlist cannot be resolved.
             if not expanded:
-                if debug:
-                    errors.append(f"playlist expansion failed; falling back to single URL: {debug.get('message')}")
-                work_urls.append(u)
-                continue
+                reason = (
+                    debug.get("message")
+                    if debug
+                    else "playlist is empty or has no accessible videos"
+                )
+                errors.append(f"Could not read playlist {u}: {reason}")
+
+                blocked = _job_error_response(
+                    job_id="",
+                    message="could not read playlist; no downloads started",
+                    errors=errors,
+                )
+                blocked["input_urls_count"] = len(urls)
+                blocked["expanded_urls_count"] = len(work_urls)
+
+                return [], errors, blocked
 
             # Guard: avoid accidental bulk downloads unless user explicitly opts in.
             if len(expanded) > 1 and not allow_playlist:
@@ -218,6 +229,7 @@ def _make_initial_item(*, job_id: str, index: int, url: str) -> dict:
 def _build_download_command(*, url: str, settings, out_template: str) -> list[str]:
     return [
         "yt-dlp",
+        "--no-playlist",
         "--windows-filenames",
         *(["--extractor-args", "youtube:player_client=android"] if not settings.cookies_from_browser else []),
         "-x",
@@ -476,10 +488,15 @@ def _summarize_job(
     total = len(items)
     succeeded = sum(1 for it in items if it.get("ok"))
     failed = total - succeeded
+    all_ok = total > 0 and failed == 0 and not errors
 
     return {
-        "ok": True,
-        "message": "job processed",
+        "ok": all_ok,
+        "message": (
+            "job processed successfully"
+            if all_ok
+            else "job processed with errors"
+        ),
         "job_id": job_id,
         "input_urls_count": input_urls_count,
         "expanded_urls_count": expanded_urls_count,
