@@ -36,6 +36,9 @@ class JobItem:
     warnings: Optional[List[str]] = None
     extra: Optional[Dict[str, Any]] = None
 
+    file_path: Optional[str] = None
+    media_type: str = "audio"
+
 
 class JobStore(Protocol):
     def create_job(self, urls: List[str]) -> str:

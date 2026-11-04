@@ -58,6 +58,36 @@ def ingest_cmd(
         print(f"job_id={result['job_id']}")
     raise typer.Exit(code=0 if result.get("ok") else 1)
 
+@app.command("video")
+def video_cmd(
+    urls: list[str],
+    allow_playlist: bool = typer.Option(
+        False,
+        "--allow-playlist",
+        help="Allow downloading multiple items from a playlist.",
+    ),
+    output_dir: str = typer.Option(
+        "outputs",
+        "--output-dir",
+        help="Directory where video files are saved.",
+    ),
+):
+    """Download videos from individual URLs or playlists."""
+    result = core_ingest(
+        inputs=urls,
+        output_dir=output_dir,
+        allow_playlist=allow_playlist,
+        media_type="video",
+    )
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+
+    if result.get("job_id"):
+        print(f"job_id={result['job_id']}")
+
+    raise typer.Exit(code=0 if result.get("ok") else 1)
+
+
 
 def run():
     app()

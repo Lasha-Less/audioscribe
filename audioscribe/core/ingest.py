@@ -48,6 +48,8 @@ def ingest(
     save_as: Optional[str] = None,
     on_event: Optional[EventCallback] = None,
     store: Optional[JobStore] = None,
+    *,
+    media_type: str = "audio",
 ) -> Dict[str, Any]:
     """
     Core/UI contract entry point.
@@ -58,6 +60,8 @@ def ingest(
     - Emits progress events (coarse-grained for now)
     - Returns stable JSON keys
     """
+    if media_type not in {"audio", "video"}:
+        raise ValueError(f"Unsupported media type: {media_type}")
     urls = _split_inputs(inputs)
 #    _ = str(Path(output_dir).expanduser().resolve())  # reserved for later (UI uses it)
 
@@ -115,6 +119,7 @@ def ingest(
         allow_playlist=allow_playlist,
         store=store,
         output_dir=output_dir,
+        media_type=media_type,
     )
     src_items = job_summary.get("items") or []
 
@@ -190,7 +195,9 @@ def ingest(
             "url": url,
             "status": status,
             "stage": "finished" if item_ok else "failed",
-            "mp3_path": it.get("mp3_path"),
+                        "media_type": media_type,
+            "file_path": it.get("file_path") or it.get("mp3_path"),
+            "mp3_path": it.get("mp3_path") if media_type == "audio" else None,
             "title": it.get("title"),
             "channel": it.get("channel"),
             "duration_seconds": it.get("duration_seconds"),
@@ -218,35 +225,55 @@ def ingest(
             },
         )
 
-    # Apply save_as rename (single item only)
+    # Apply save_as rename to one successfully processed item.
     if save_as and len(response["items"]) == 1:
         item0 = response["items"][0]
-        old_path = item0.get("mp3_path")
+        old_path = item0.get("file_path")
 
-        if old_path:
+        if item0["ok"] and old_path:
             old = Path(old_path)
-            safe_name = _ensure_mp3_ext(_sanitize_filename(save_as))
+            safe_name = _sanitize_filename(save_as)
+
+            # Keep the actual downloaded file extension.
+            if not safe_name.lower().endswith(old.suffix.lower()):
+                safe_name += old.suffix
 
             new = old.with_name(safe_name)
 
-            # Avoid clobbering an existing file
-            if new.exists():
-                stem = new.stem
-                suffix = new.suffix
-                i = 1
-                while True:
-                    candidate = new.with_name(f"{stem} ({i}){suffix}")
-                    if not candidate.exists():
-                        new = candidate
-                        break
-                    i += 1
+            if new != old:
+                if new.exists():
+                    stem = new.stem
+                    suffix = new.suffix
+                    i = 1
+                    while True:
+                        candidate = new.with_name(f"{stem} ({i}){suffix}")
+                        if not candidate.exists():
+                            new = candidate
+                            break
+                        i += 1
 
-            try:
-                old.rename(new)
-                item0["mp3_path"] = str(new)
-            except Exception as e:
-                item0.setdefault("warnings", [])
-                item0["warnings"].append(f"Could not rename file: {e}")
+                try:
+                    old.rename(new)
+                except Exception as e:
+                    item0.setdefault("warnings", []).append(
+                        f"Could not rename file: {e}"
+                    )
+                else:
+                    item0["file_path"] = str(new)
+                    item0["mp3_path"] = (
+                        str(new) if media_type == "audio" else None
+                    )
+
+                    item_id = src_items[0].get("item_id")
+                    if item_id:
+                        store.update_item(
+                            job_id,
+                            item_id,
+                            {
+                                "file_path": item0["file_path"],
+                                "mp3_path": item0["mp3_path"],
+                            },
+                        )
 
     _emit(
         on_event,

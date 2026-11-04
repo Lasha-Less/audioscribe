@@ -11,13 +11,14 @@ from audioscribe.core.models import (
 )
 
 
-def verify_audio(mp3_path: str | Path) -> VerificationResult:
-    """
-    Verifies basic technical properties of an audio file using ffprobe.
-
-    Extracts duration, bitrate, sample rate, channels and codec.
-    Returns a structured VerificationResult.
-    """
+def verify_media(
+    mp3_path: str | Path,
+    *,
+    media_type: str = "audio",
+) -> VerificationResult:
+    """Verify audio or video using ffprobe."""
+    if media_type not in {"audio", "video"}:
+        raise ValueError(f"Unsupported media type: {media_type}")
     mp3_path = Path(mp3_path)
 
     if not mp3_path.exists():
@@ -82,6 +83,15 @@ def verify_audio(mp3_path: str | Path) -> VerificationResult:
         {},
     )
 
+    video_stream = next(
+        (
+            s for s in streams
+            if s.get("codec_type") == "video"
+            and not (s.get("disposition") or {}).get("attached_pic")
+        ),
+        {},
+    )
+
     duration = float(format_info.get("duration", 0)) if format_info.get("duration") else None
     bitrate = int(format_info.get("bit_rate", 0)) // 1000 if format_info.get("bit_rate") else None
     sample_rate = int(audio_stream.get("sample_rate", 0)) if audio_stream.get("sample_rate") else None
@@ -97,18 +107,29 @@ def verify_audio(mp3_path: str | Path) -> VerificationResult:
         file_size_bytes=int(format_info.get("size", 0)) if format_info.get("size") else None,
     )
 
-    # Quality rules (Option A):
     warnings: list[str] = []
     errors: list[str] = []
 
-    # Rule A1: duration must be meaningful (avoid bogus/empty downloads)
+    # Both download modes are expected to contain audio.
+    if not audio_stream:
+        errors.append("No audio stream found")
+
+    if media_type == "video":
+        if not video_stream:
+            errors.append("No video stream found")
+        elif (
+                (video_stream.get("width") or 0) <= 0
+                or (video_stream.get("height") or 0) <= 0
+        ):
+            errors.append("Invalid video dimensions")
+
     if duration is None or duration <= 0:
         errors.append("Invalid or zero duration")
-    elif duration < 5.0:
+    elif media_type == "audio" and duration < 5.0:
         errors.append(f"Duration too short: {duration:.2f}s < 5.00s")
 
-    # Rule A2: bitrate quality warning (do not fail)
-    if bitrate is not None and bitrate < 96:
+    # Preserve the existing audio quality warning.
+    if media_type == "audio" and bitrate is not None and bitrate < 96:
         warnings.append(f"Low bitrate: {bitrate} kbps < 96 kbps")
 
     # Decide overall status
@@ -126,3 +147,5 @@ def verify_audio(mp3_path: str | Path) -> VerificationResult:
         errors=errors,
     )
 
+def verify_audio(mp3_path: str | Path) -> VerificationResult:
+    return verify_media(mp3_path, media_type="audio")

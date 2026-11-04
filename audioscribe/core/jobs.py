@@ -226,18 +226,45 @@ def _make_initial_item(*, job_id: str, index: int, url: str) -> dict:
     }
 
 
-def _build_download_command(*, url: str, settings, out_template: str) -> list[str]:
+def _build_download_command(
+    *,
+    url: str,
+    settings,
+    out_template: str,
+    media_type: str = "audio",
+) -> list[str]:
+    if media_type == "audio":
+        format_options = [
+            "-x",
+            "--audio-format", "mp3",
+        ]
+    elif media_type == "video":
+        format_options = [
+            "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+            "--merge-output-format", "mp4",
+        ]
+    else:
+        raise ValueError(f"Unsupported media type: {media_type}")
+
     return [
         "yt-dlp",
+        "--encoding", "utf-8",
         "--no-playlist",
         "--windows-filenames",
-        *(["--extractor-args", "youtube:player_client=android"] if not settings.cookies_from_browser else []),
-        "-x",
-        "--audio-format", "mp3",
+        *(
+            ["--extractor-args", "youtube:player_client=android"]
+            if not settings.cookies_from_browser
+            else []
+        ),
+        *format_options,
         "--print", "before_dl:url",
         "--print", "after_move:filepath",
         "-o", out_template,
-        *(["--cookies-from-browser", settings.cookies_from_browser] if settings.cookies_from_browser else []),
+        *(
+            ["--cookies-from-browser", settings.cookies_from_browser]
+            if settings.cookies_from_browser
+            else []
+        ),
         url,
     ]
 
@@ -313,11 +340,18 @@ def _build_download_failure_item(
     return item
 
 
-def _run_and_normalize_verification(mp3_path: str) -> dict:
-    from audioscribe.core.verify_audio import verify_audio
+def _run_and_normalize_verification(
+    mp3_path: str,
+    *,
+    media_type: str = "audio",
+) -> dict:
+    from audioscribe.core.verify_audio import verify_audio, verify_media
 
     try:
-        verification = verify_audio(mp3_path)
+        if media_type == "audio":
+            verification = verify_audio(mp3_path)
+        else:
+            verification = verify_media(mp3_path, media_type=media_type)
     except Exception as e:
         return normalize_verification(
             status="failed",
@@ -379,6 +413,25 @@ def _finalize_processed_item(
     return item
 
 
+
+def _resolve_download_path(
+    file_path: str,
+    url: str,
+    out_dir: Path,
+    *,
+    media_type: str,
+) -> tuple[str, bool]:
+    if media_type == "audio":
+        return _resolve_mp3_path(file_path, url, out_dir)
+
+    if not file_path:
+        return "", False
+
+    path = Path(file_path).resolve()
+    return str(path), path.is_file()
+
+
+
 def _process_one_url(
     *,
     job_id: str,
@@ -387,12 +440,17 @@ def _process_one_url(
     settings,
     out_dir: Path,
     out_template: str,
+    media_type: str = "audio",
 ) -> dict:
     """
-    Download one URL via yt-dlp and verify the produced MP3.
-    Returns canonical per-item structure (stable keys).
+    Download and verify one audio or video item.
     """
     item = _make_initial_item(job_id=job_id, index=index, url=url)
+    item.update({
+        "media_type": media_type,
+        "file_path": None,
+        "file_exists": False,
+    })
 
     source_info = {}
     try:
@@ -404,6 +462,7 @@ def _process_one_url(
         url=url,
         settings=settings,
         out_template=out_template,
+        media_type=media_type,
     )
 
     try:
@@ -432,11 +491,16 @@ def _process_one_url(
             debug={"error": str(e)},
         )
 
-    mp3_path = _parse_download_stdout(completed.stdout)
-    mp3_path, mp3_exists = _resolve_mp3_path(mp3_path, url, out_dir)
+    file_path = _parse_download_stdout(completed.stdout)
+    file_path, file_exists = _resolve_download_path(
+        file_path,
+        url,
+        out_dir,
+        media_type=media_type,
+    )
 
     debug = None
-    if not mp3_exists:
+    if not file_exists:
         debug = {
             "stdout_tail": (completed.stdout or "")[-400:],
             "stderr_tail": (completed.stderr or "")[-400:],
@@ -445,35 +509,42 @@ def _process_one_url(
     metadata = normalize_source_metadata(
         source_info,
         source_url=url,
-        mp3_path=mp3_path if mp3_exists else None,
+        mp3_path=file_path if file_exists else None,
     )
-
-    title = metadata["title"]
-    channel = metadata["channel"]
-    duration_seconds = metadata["duration_seconds"]
 
     verification_payload = normalize_verification(
         status="failed",
-        path=mp3_path if mp3_path else None,
+        path=file_path or None,
         metrics=None,
         warnings=[],
-        errors=[] if mp3_exists else ["mp3 not found after download"],
+        errors=[] if file_exists else ["file not found after download"],
     )
 
-    if mp3_exists:
-        verification_payload = _run_and_normalize_verification(mp3_path)
+    if file_exists:
+        verification_payload = _run_and_normalize_verification(
+            file_path,
+            media_type=media_type,
+        )
 
-    return _finalize_processed_item(
-        item=item,
-        mp3_path=mp3_path,
-        mp3_exists=mp3_exists,
-        debug=debug,
-        title=title,
-        channel=channel,
-        duration_seconds=duration_seconds,
-        metadata=metadata,
-        verification_payload=verification_payload,
+    item.update({
+        "file_path": file_path,
+        "file_exists": file_exists,
+        "mp3_path": file_path if media_type == "audio" else None,
+        "mp3_exists": file_exists if media_type == "audio" else False,
+        "debug": debug,
+        "title": metadata["title"],
+        "channel": metadata["channel"],
+        "duration_seconds": metadata["duration_seconds"],
+        "metadata": metadata,
+        "verification": verification_payload,
+        "ok": file_exists and verification_payload["status"] != "failed",
+    })
+    item["message"] = (
+        f"downloaded {media_type}"
+        if item["ok"]
+        else f"{media_type} download or verification failed"
     )
+    return item
 
 
 def _summarize_job(
@@ -532,7 +603,9 @@ def _store_item_result(
         item_id,
         {
             "status": "done" if succeeded else "failed",
-            "mp3_path": result.get("mp3_path"),
+                        "mp3_path": result.get("mp3_path"),
+            "file_path": result.get("file_path") or result.get("mp3_path"),
+            "media_type": result.get("media_type", "audio"),
             "title": result.get("title"),
             "channel": result.get("channel"),
             "duration_seconds": result.get("duration_seconds"),
@@ -553,8 +626,11 @@ def process_job(
     *,
     store: JobStore | None = None,
     output_dir: str | Path = "outputs",
+    media_type: str = "audio",
 ) -> dict:
     """Download and verify the URLs belonging to an existing job."""
+    if media_type not in {"audio", "video"}:
+        raise ValueError(f"Unsupported media type: {media_type}")
     active_store = store if store is not None else _DEFAULT_STORE
 
     try:
@@ -577,9 +653,14 @@ def process_job(
         urls, settings, allow_playlist
     )
 
-
     if blocked is not None:
         blocked["job_id"] = job_id
+        if media_type == "video" and blocked.get("next_command"):
+            blocked["next_command"] = blocked["next_command"].replace(
+                "audioscribe ingest ",
+                "python -m audioscribe video ",
+                1,
+            )
         return blocked
 
     out_dir, out_template = _make_output_dir_and_template(output_dir)
@@ -602,6 +683,7 @@ def process_job(
             settings=settings,
             out_dir=out_dir,
             out_template=out_template,
+            media_type=media_type,
         )
         result["item_id"] = stored_item.item_id
 
