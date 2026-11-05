@@ -40,7 +40,7 @@ def ingest_cmd(
         help="Allow downloading multiple items when a playlist is detected/expanded.",
     ),
     output_dir: str = typer.Option(
-        "outputs",
+        str(Path.home() / "Downloads" / "AudioScribe"),
         "--output-dir",
         help="Directory where audio files are saved.",
     ),
@@ -67,7 +67,7 @@ def video_cmd(
         help="Allow downloading multiple items from a playlist.",
     ),
     output_dir: str = typer.Option(
-        "outputs",
+        str(Path.home() / "Downloads" / "AudioScribe"),
         "--output-dir",
         help="Directory where video files are saved.",
     ),
