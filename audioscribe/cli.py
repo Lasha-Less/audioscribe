@@ -88,6 +88,13 @@ def video_cmd(
     raise typer.Exit(code=0 if result.get("ok") else 1)
 
 
+@app.command("gui")
+def gui_cmd():
+    """Open the AudioScribe desktop window."""
+    from audioscribe.gui import main
+
+    main()
+
 
 def run():
     app()
