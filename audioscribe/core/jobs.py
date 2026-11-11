@@ -16,7 +16,7 @@ from __future__ import annotations
 import subprocess
 #from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 #from uuid import uuid4
 from urllib.parse import urlparse, parse_qs
 from audioscribe.core.verification_schema import normalize_verification
@@ -620,6 +620,39 @@ def _store_item_result(
         },
     )
 
+def _emit_item_progress(
+    on_event: Callable[[dict], None] | None,
+    *,
+    job_id: str,
+    url: str,
+    stage: str,
+    item_index: int,
+    total_items: int,
+    completed_items: int,
+    title: str | None = None,
+) -> None:
+    if on_event is None:
+        return
+
+    on_event({
+        "type": "progress",
+        "job_id": job_id,
+        "url": url,
+        "stage": stage,
+        "item_index": item_index,
+        "total_items": total_items,
+        "completed_items": completed_items,
+        "title": title,
+        # Item counts describe overall progress, not progress within a file.
+        "percent": None,
+        "message": (
+            f"Downloading {item_index} of {total_items}"
+            if stage == "downloading"
+            else f"Processed {completed_items} of {total_items}"
+        ),
+    })
+
+
 def process_job(
     job_id: str,
     allow_playlist: bool = False,
@@ -627,6 +660,7 @@ def process_job(
     store: JobStore | None = None,
     output_dir: str | Path = "outputs",
     media_type: str = "audio",
+    on_event: Callable[[dict], None] | None = None,
 ) -> dict:
     """Download and verify the URLs belonging to an existing job."""
     if media_type not in {"audio", "video"}:
@@ -676,6 +710,16 @@ def process_job(
             {"status": "running"},
         )
 
+        _emit_item_progress(
+            on_event,
+            job_id=job_id,
+            url=stored_item.url,
+            stage="downloading",
+            item_index=index + 1,
+            total_items=len(stored_items),
+            completed_items=index,
+        )
+
         result = _process_one_url(
             job_id=job_id,
             url=stored_item.url,
@@ -694,6 +738,17 @@ def process_job(
             result,
         )
         items.append(result)
+
+        _emit_item_progress(
+            on_event,
+            job_id=job_id,
+            url=stored_item.url,
+            stage="finished" if result.get("ok") else "failed",
+            item_index=index + 1,
+            total_items=len(stored_items),
+            completed_items=index + 1,
+            title=result.get("title"),
+        )
 
     return _summarize_job(
         job_id=job_id,

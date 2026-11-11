@@ -120,6 +120,7 @@ def ingest(
         store=store,
         output_dir=output_dir,
         media_type=media_type,
+        on_event=on_event,
     )
     src_items = job_summary.get("items") or []
 
@@ -212,18 +213,6 @@ def ingest(
             },
         }
         response["items"].append(item_result)
-
-        _emit(
-            on_event,
-            {
-                "type": "progress",
-                "job_id": job_id,
-                "url": url,
-                "stage": "finished" if item_ok else "failed",
-                "percent": 100 if item_ok else None,
-                "message": "Finished." if item_ok else "Failed.",
-            },
-        )
 
     # Apply save_as rename to one successfully processed item.
     if save_as and len(response["items"]) == 1:
